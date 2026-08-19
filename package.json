@@ -61,7 +61,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/extension.js"
+      "./index.ts"
     ],
     "video": "https://github.com/nicobailon/pi-web-access/raw/refs/heads/main/pi-web-fetch-demo.mp4"
   }
