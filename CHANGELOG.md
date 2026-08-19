@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-08-19
+
+### Changed
+- Load search providers on demand instead of importing every backend at extension startup.
+
 ## [0.24.2] - 2026-08-19
 
 ### Fixed

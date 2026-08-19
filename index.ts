@@ -9,7 +9,15 @@ import { findContent, type FindMode } from "./content-find.ts";
 import { answerFromPage } from "./page-query.ts";
 import { rewriteSearchQuery } from "./query-rewrite.ts";
 import { clearCloneCache } from "./github-extract.ts";
-import { getConfiguredSearchRouting, normalizeSearchProviderSelection, RESOLVED_SEARCH_PROVIDERS, SEARCH_PROVIDERS, search, type AttributedSearchResponse, type SearchProvider, type SearchProviderSelection, type ResolvedSearchProvider } from "./gemini-search.ts";
+import {
+	normalizeSearchProviderSelection,
+	RESOLVED_SEARCH_PROVIDERS,
+	SEARCH_PROVIDERS,
+	type SearchProvider,
+	type SearchProviderSelection,
+	type ResolvedSearchProvider,
+} from "./search-providers.ts";
+import type { AttributedSearchResponse } from "./gemini-search.ts";
 import type { SearchResult } from "./perplexity.ts";
 import { formatSeconds, getWebSearchConfigDir, getWebSearchConfigPath, resolveCuratorNetworkConfig } from "./utils.ts";
 import {
@@ -39,34 +47,10 @@ import { createRequire } from "node:module";
 import { platform } from "node:os";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { isPerplexityAvailable } from "./perplexity.ts";
-import { isExaAvailable } from "./exa.ts";
 import { isGeminiApiAvailable } from "./gemini-api.ts";
 import { getActiveGoogleEmail, getGeminiWebAvailabilityDiagnostic, isGeminiWebAvailable } from "./gemini-web.ts";
 import { isBrowserCookieAccessAllowed } from "./gemini-web-config.ts";
-import { isBraveAvailable } from "./brave.ts";
-import { isOpenAISearchAvailable } from "./openai-search.ts";
-import { isParallelAvailable } from "./parallel.ts";
-import { isParallelMcpAvailable } from "./parallel-mcp.ts";
-import { isTinyFishAvailable } from "./tinyfish.ts";
-import { isSearch1APIAvailable } from "./search1api.ts";
-import { isSearchinfinityAvailable } from "./searchinfinity.ts";
-import { isQueritAvailable } from "./querit.ts";
-import { isTavilyAvailable } from "./tavily.ts";
-import { isFirecrawlAvailable } from "./firecrawl.ts";
-import { isJinaSearchAvailable } from "./jina-search.ts";
-import { isSerpdiveAvailable } from "./serpdive.ts";
-import { isKagiAvailable } from "./kagi.ts";
-import { isBochaAvailable } from "./bocha.ts";
-import { isOllamaAvailable } from "./ollama.ts";
-import { isSearXNGAvailable } from "./searxng.ts";
-import { isDuckDuckGoAvailable } from "./duckduckgo.ts";
-import { isAnySearchAvailable } from "./anysearch.ts";
-import { isXaiSearchAvailable } from "./xai-search.ts";
-import { isBrightDataAvailable } from "./brightdata.ts";
-import { isSerpBaseAvailable } from "./serpbase.ts";
-import { isSerperAvailable } from "./serper.ts";
-import { isValyuAvailable } from "./valyu.ts";
+import { isLazyProviderAvailable } from "./search-provider-runtime.ts";
 import { buildSearchErrorPlan, type SearchErrorDetails, type SearchErrorPlan } from "./render-search-error.ts";
 import { findModelWithProviderRouting, loadEnabledModelPatterns, modelMatchesEnabledPatterns, splitThinkingSuffix } from "./summary-model-scope.ts";
 import {
@@ -83,6 +67,11 @@ type ExtensionTheme = ExtensionContext["ui"]["theme"];
 const WEB_SEARCH_CONFIG_PATH = getWebSearchConfigPath();
 
 let extractModulePromise: Promise<typeof import("./extract.ts")> | undefined;
+let searchModulePromise: Promise<typeof import("./gemini-search.ts")> | undefined;
+function loadSearchModule() {
+	searchModulePromise ??= import("./gemini-search.ts");
+	return searchModulePromise;
+}
 async function fetchAllContent(
 	urls: string[],
 	signal?: AbortSignal,
@@ -385,33 +374,15 @@ function shouldAutoOpenCuratorBrowser(config: WebSearchConfig): boolean {
 async function getProviderAvailability(ctx: ExtensionContext): Promise<ProviderAvailability> {
 	const geminiWebAvail = await isGeminiWebAvailable();
 	const geminiApiAvail = isGeminiApiAvailable();
+	const names = [
+		"openai", "brave", "parallel", "parallel-mcp", "tinyfish", "search1api", "searchinfinity",
+		"querit", "tavily", "firecrawl", "jina", "serpdive", "kagi", "bocha", "ollama", "searxng",
+		"duckduckgo", "perplexity", "exa", "anysearch", "xai", "brightdata", "serpbase", "serper", "valyu",
+	] as const;
+	const flags = await Promise.all(names.map((name) => isLazyProviderAvailable(name, ctx)));
 	const providers = {
-		openai: await isOpenAISearchAvailable(ctx),
-		brave: isBraveAvailable(),
-		parallel: isParallelAvailable(),
-		"parallel-mcp": isParallelMcpAvailable(),
-		tinyfish: isTinyFishAvailable(),
-		search1api: isSearch1APIAvailable(),
-		searchinfinity: isSearchinfinityAvailable(),
-		querit: isQueritAvailable(),
-		tavily: isTavilyAvailable(),
-		firecrawl: isFirecrawlAvailable(),
-		jina: isJinaSearchAvailable(),
-		serpdive: isSerpdiveAvailable(),
-		kagi: isKagiAvailable(),
-		bocha: isBochaAvailable(),
-		ollama: isOllamaAvailable(),
-		searxng: isSearXNGAvailable(),
-		duckduckgo: isDuckDuckGoAvailable(),
-		perplexity: isPerplexityAvailable(),
-		exa: isExaAvailable(),
+		...Object.fromEntries(names.map((name, index) => [name, flags[index]])) as Record<typeof names[number], boolean>,
 		gemini: geminiApiAvail || !!geminiWebAvail,
-		anysearch: isAnySearchAvailable(),
-		xai: await isXaiSearchAvailable(ctx),
-		brightdata: isBrightDataAvailable(),
-		serpbase: isSerpBaseAvailable(),
-		serper: isSerperAvailable(),
-		valyu: isValyuAvailable(),
 	};
 	return {
 		// Parallel MCP, DuckDuckGo, AnySearch, xAI, Bright Data, SerpBase, Serper, and Valyu are explicit-only, so they never make `all` eligible.
@@ -439,7 +410,7 @@ async function loadCuratorBootstrap(
 	if (Array.isArray(provider)) availableProviders.all = true;
 	return {
 		availableProviders,
-		defaultProvider: resolveProvider(provider, availableProviders, options),
+		defaultProvider: await resolveProvider(provider, availableProviders, options),
 		timeoutSeconds: getCuratorTimeoutSeconds(),
 	};
 }
@@ -466,16 +437,16 @@ function firstAvailableProvider(available: ProviderAvailability, preferOpenAI: b
 	return fallback;
 }
 
-function resolveProvider(
+async function resolveProvider(
 	provider: SearchProviderSelection,
 	available: ProviderAvailability,
 	options?: Pick<PendingCurate, "numResults" | "recencyFilter">,
-): CuratorProvider {
+): Promise<CuratorProvider> {
 	if (Array.isArray(provider)) return "all";
 	const preferOpenAI = shouldPreferOpenAI(options);
 
 	if (provider === "auto") {
-		const routing = getConfiguredSearchRouting();
+		const routing = (await loadSearchModule()).getConfiguredSearchRouting();
 		if (routing) {
 			for (const candidate of routing.providers) {
 				if (available[candidate]) return candidate;
@@ -1498,7 +1469,7 @@ export default function (pi: ExtensionAPI) {
 					async onAddSearch(query, provider) {
 						if (pendingCurates.get(callId) !== pc) throw new Error("Curator session is no longer active.");
 						const requestedProvider = resolveCuratorSearchProvider(provider, pc.searchProvider);
-						const response = await search(query, {
+						const response = await (await loadSearchModule()).search(query, {
 							provider: requestedProvider,
 							numResults: pc.numResults,
 							recencyFilter: pc.recencyFilter,
@@ -1791,7 +1762,7 @@ export default function (pi: ExtensionAPI) {
 					});
 					const requestedProvider = pc.searchProvider;
 					try {
-						const response = await search(queryList[qi], {
+						const response = await (await loadSearchModule()).search(queryList[qi], {
 							provider: requestedProvider,
 							numResults: params.numResults,
 							recencyFilter,
@@ -1887,7 +1858,7 @@ export default function (pi: ExtensionAPI) {
 				});
 
 				try {
-					const { answer, results, inlineContent, provider } = await search(query, {
+					const { answer, results, inlineContent, provider } = await (await loadSearchModule()).search(query, {
 						provider: resolvedProvider,
 						numResults: params.numResults,
 						recencyFilter,
@@ -2252,7 +2223,7 @@ export default function (pi: ExtensionAPI) {
 			for (const query of queries) {
 				if (signal?.aborted) break;
 				try {
-					const response = await search(query, {
+					const response = await (await loadSearchModule()).search(query, {
 						provider: resolveRequestedProvider(params.provider),
 						numResults,
 						recencyFilter,
@@ -3119,7 +3090,7 @@ export default function (pi: ExtensionAPI) {
 								throw new Error("Curator session is no longer active.");
 							}
 							const requestedProvider = resolveCuratorSearchProvider(provider, currentSearchProvider);
-							const response = await search(query, {
+							const response = await (await loadSearchModule()).search(query, {
 								provider: requestedProvider,
 								signal: searchAbort.signal,
 								extensionContext: ctx,
@@ -3191,7 +3162,7 @@ export default function (pi: ExtensionAPI) {
 							if (aborted || !isCommandActive()) break;
 							const requestedProvider = currentSearchProvider;
 							try {
-								const response = await search(queries[qi], {
+								const response = await (await loadSearchModule()).search(queries[qi], {
 									provider: requestedProvider,
 									signal: searchAbort.signal,
 									extensionContext: ctx,
