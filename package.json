@@ -37,8 +37,7 @@
     "CHANGELOG.md",
     "SECURITY.md",
     "banner.png",
-    "pi-web-fetch-demo.mp4",
-    "dist"
+    "pi-web-fetch-demo.mp4"
   ],
   "devDependencies": {
     "@types/turndown": "^5.0.6",
