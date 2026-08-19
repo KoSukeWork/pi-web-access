@@ -50,7 +50,39 @@ interface GitHubCloneConfig {
 	clonePath: string;
 }
 
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const GITHUB_REPO_PATTERN = /^(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
 const cloneCache = new Map<string, CachedClone>();
+
+export function isGitHubOwnerName(value: string): boolean {
+	return GITHUB_OWNER_PATTERN.test(value);
+}
+
+export function isGitHubRepoName(value: string): boolean {
+	return GITHUB_REPO_PATTERN.test(value);
+}
+
+function isInsideDirectory(root: string, candidate: string): boolean {
+	const resolvedRoot = resolvePath(root);
+	const resolvedCandidate = resolvePath(candidate);
+	if (resolvedCandidate === resolvedRoot) return true;
+	const prefix = resolvedRoot.endsWith(pathSep) ? resolvedRoot : resolvedRoot + pathSep;
+	return resolvedCandidate.startsWith(prefix);
+}
+
+export function resolveGitHubCloneDir(
+	clonePath: string,
+	owner: string,
+	repo: string,
+	ref?: string,
+): string | null {
+	if (!isGitHubOwnerName(owner) || !isGitHubRepoName(repo)) return null;
+	const root = resolvePath(clonePath);
+	const dirName = ref === undefined || ref === "" ? repo : `${repo}@${encodeURIComponent(ref)}`;
+	if (dirName === "." || dirName === "..") return null;
+	const candidate = resolvePath(root, owner, dirName);
+	return isInsideDirectory(root, candidate) ? candidate : null;
+}
 
 let cachedConfig: GitHubCloneConfig | null = null;
 
@@ -151,6 +183,7 @@ export function parseGitHubUrl(url: string): GitHubUrlInfo | null {
 
 	const owner = segments[0];
 	const repo = segments[1].replace(/\.git$/, "");
+	if (!isGitHubOwnerName(owner) || !isGitHubRepoName(repo)) return null;
 
 	if (NON_CODE_SEGMENTS.has(segments[2]?.toLowerCase())) return null;
 
@@ -182,8 +215,9 @@ function cacheKey(owner: string, repo: string, ref?: string): string {
 }
 
 function cloneDir(config: GitHubCloneConfig, owner: string, repo: string, ref?: string): string {
-	const dirName = ref ? `${repo}@${ref}` : repo;
-	return join(config.clonePath, owner, dirName);
+	const resolved = resolveGitHubCloneDir(config.clonePath, owner, repo, ref);
+	if (!resolved) throw new Error("Refusing GitHub clone path outside clonePath");
+	return resolved;
 }
 
 const PROCESS_KILL_GRACE_MS = 3000;
@@ -611,6 +645,9 @@ export async function extractGitHub(
 	if (!config.enabled) return null;
 
 	const { owner, repo } = info;
+	if (!resolveGitHubCloneDir(config.clonePath, owner, repo, info.ref)) {
+		return { url, title: `${owner}/${repo}`, content: "", error: "Refusing unsafe GitHub clone path" };
+	}
 	const key = cacheKey(owner, repo, info.ref);
 
 	const cached = cloneCache.get(key);

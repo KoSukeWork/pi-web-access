@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-08-19
+
+### Fixed
+- Reject GitHub clone owner/repo names that are not valid GitHub identities, and keep clone directories inside `clonePath` so encoded `..` segments cannot escape or delete host paths.
+
 ## [0.24.0] - 2026-08-18
 
 ### Highlights

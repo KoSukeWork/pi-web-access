@@ -3,10 +3,28 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { test } from "node:test";
 
 const extractModuleUrl = new URL("../github-extract.ts", import.meta.url).href;
+const { parseGitHubUrl, resolveGitHubCloneDir } = await import("../github-extract.ts");
+
+test("parseGitHubUrl rejects path-escape owner and repo names", () => {
+	assert.equal(parseGitHubUrl("https://github.com/%2e%2e/evil"), null);
+	assert.equal(parseGitHubUrl("https://github.com/../evil"), null);
+	assert.equal(parseGitHubUrl("https://github.com/owner/.."), null);
+	assert.equal(parseGitHubUrl("https://github.com/owner/repo.git")?.repo, "repo");
+});
+
+test("resolveGitHubCloneDir stays inside clonePath", () => {
+	const root = join(tmpdir(), "pi-web-access-clone-root");
+	assert.ok(resolveGitHubCloneDir(root, "owner", "repo"));
+	assert.equal(resolveGitHubCloneDir(root, "..", "repo"), null);
+	assert.equal(resolveGitHubCloneDir(root, "owner", ".."), null);
+	const escapedRef = resolveGitHubCloneDir(root, "owner", "repo", "../../../etc");
+	assert.ok(escapedRef);
+	assert.equal(resolve(escapedRef, "..", ".."), resolve(root));
+});
 
 async function writeFakeExecutable(binDir, name, source) {
 	const executable = join(binDir, name);
