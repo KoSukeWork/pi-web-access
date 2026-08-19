@@ -18,7 +18,7 @@ import { extractWithSearch1API, isSearch1APIAvailable } from "./search1api.ts";
 import { extractWithQuerit, isQueritAvailable } from "./querit.ts";
 import { extractWithKagi, isKagiExtractAvailable } from "./kagi.ts";
 import { extractWithOllama, isOllamaFetchAvailable } from "./ollama.ts";
-import { extractWithFirecrawl, isFirecrawlAvailable } from "./firecrawl.ts";
+import { extractWithFirecrawl, isCloudFirecrawlEndpoint, isFirecrawlAvailable } from "./firecrawl.ts";
 import { extractWithBrightDataUnlocker, isBrightDataUnlockerAvailable } from "./brightdata-unlocker.ts";
 import { isVideoFile, extractVideo, extractVideoFrame, getLocalVideoDuration } from "./video-extract.ts";
 import { appendDeclaredWebLinks, discoverDeclaredWebLinks, type DeclaredWebLink } from "./declared-web-links.ts";
@@ -40,6 +40,11 @@ type FetchProvider = typeof FETCH_PROVIDERS[number];
 type FetchRouting = { providers: FetchProvider[]; allowRemoteHostedProviders: boolean };
 const DEFAULT_FETCH_PROVIDER_ORDER: FetchProvider[] = ["http", "firecrawl", "jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "brightdata", "gemini"];
 const REMOTE_HOSTED_FETCH_PROVIDERS = new Set<FetchProvider>(["jina", "tinyfish", "search1api", "querit", "kagi", "ollama", "parallel", "parallel-mcp", "brightdata", "gemini"]);
+
+function isRemoteHostedFetchProvider(provider: FetchProvider): boolean {
+	if (provider === "firecrawl") return isCloudFirecrawlEndpoint();
+	return REMOTE_HOSTED_FETCH_PROVIDERS.has(provider);
+}
 
 export { loadSsrfConfig } from "./ssrf-protection.ts";
 
@@ -630,7 +635,7 @@ export async function extractContent(
 		return { url, title: "", content: "", error: errorMessage(err) };
 	}
 	const providerOrder = remoteUrl && !fetchRouting.allowRemoteHostedProviders
-		? fetchRouting.providers.filter(provider => !REMOTE_HOSTED_FETCH_PROVIDERS.has(provider))
+		? fetchRouting.providers.filter(provider => !isRemoteHostedFetchProvider(provider))
 		: fetchRouting.providers;
 	if (providerOrder.length === 0) {
 		return {

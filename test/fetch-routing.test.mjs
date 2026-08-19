@@ -140,6 +140,76 @@ test("image attachment gate suppresses malformed config", async () => {
 	assert.match(output.parseError, /Failed to parse .*web-search\.json/);
 });
 
+test("cloud Firecrawl is treated as a remote hosted provider", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-firecrawl-cloud-"));
+	await writeFile(join(root, "web-search.json"), JSON.stringify({
+		firecrawlBaseUrl: "https://api.firecrawl.dev",
+		firecrawlApiKey: "fc-test",
+		fetchRouting: { providers: ["http", "firecrawl"] },
+	}) + "\n", "utf8");
+	const childEnv = cleanProviderEnv(root);
+	childEnv.FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
+	childEnv.FIRECRAWL_API_KEY = "fc-test";
+	const child = spawnSync(process.execPath, ["--input-type=module"], {
+		input: `
+			const calls = [];
+			globalThis.fetch = async (url) => {
+				const text = String(url);
+				calls.push(text);
+				if (text === "https://example.com/routed") return new Response("blocked", { status: 403 });
+				return new Response("unexpected", { status: 500 });
+			};
+			const { extractContent } = await import(${JSON.stringify(extractUrl)});
+			const result = await extractContent("https://example.com/routed", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			console.log(JSON.stringify({ calls, result }));
+		`,
+		encoding: "utf8",
+		env: childEnv,
+		maxBuffer: 2 * 1024 * 1024,
+	});
+	assert.equal(child.status, 0, child.stderr);
+	const output = JSON.parse(child.stdout.trim());
+	assert.deepEqual(output.calls, ["https://example.com/routed"]);
+	assert.match(output.result.error, /HTTP 403/);
+});
+
+test("self-hosted Firecrawl remains available without hosted-provider opt-in", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-firecrawl-local-"));
+	await writeFile(join(root, "web-search.json"), JSON.stringify({
+		firecrawlBaseUrl: "https://crawl.example.com",
+		firecrawlApiKey: "fc-test",
+		fetchRouting: { providers: ["http", "firecrawl"] },
+	}) + "\n", "utf8");
+	const childEnv = cleanProviderEnv(root);
+	childEnv.FIRECRAWL_BASE_URL = "https://crawl.example.com";
+	childEnv.FIRECRAWL_API_KEY = "fc-test";
+	const child = spawnSync(process.execPath, ["--input-type=module"], {
+		input: `
+			const calls = [];
+			globalThis.fetch = async (url) => {
+				const text = String(url);
+				calls.push(text);
+				if (text === "https://example.com/routed") return new Response("blocked", { status: 403 });
+				if (text === "https://crawl.example.com/v2/scrape") {
+					return new Response(JSON.stringify({ success: true, data: { markdown: "# Local", metadata: { title: "Local" } } }), { status: 200 });
+				}
+				throw new Error("Unexpected fetch " + text);
+			};
+			const { extractContent } = await import(${JSON.stringify(extractUrl)});
+			const result = await extractContent("https://example.com/routed", undefined, { lookup: async () => [{ address: "93.184.216.34", family: 4 }] });
+			console.log(JSON.stringify({ calls, result }));
+		`,
+		encoding: "utf8",
+		env: childEnv,
+		maxBuffer: 2 * 1024 * 1024,
+	});
+	assert.equal(child.status, 0, child.stderr);
+	const output = JSON.parse(child.stdout.trim());
+	assert.deepEqual(output.calls, ["https://example.com/routed", "https://crawl.example.com/v2/scrape"]);
+	assert.equal(output.result.error, null);
+	assert.equal(output.result.title, "Local");
+});
+
 test("Ollama Web Fetch is disabled for remote URLs without hosted-provider opt-in", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-ollama-"));
 	await writeFile(join(root, "web-search.json"), JSON.stringify({ ollamaApiKey: "test-key", fetchRouting: { providers: ["ollama", "http"] } }) + "\n", "utf8");

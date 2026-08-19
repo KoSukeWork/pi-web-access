@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fetchRemoteUrl, validateRemoteUrl } from "../ssrf-protection.ts";
+import { fetchRemoteUrl, resolveValidatedRemoteTarget, validateRemoteUrl } from "../ssrf-protection.ts";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
 
@@ -48,6 +48,28 @@ test("validateRemoteUrl blocks hostnames that resolve to private addresses", asy
 		}),
 		/Blocked internal address for example\.test: fd00::1/,
 	);
+});
+
+test("resolveValidatedRemoteTarget pins public hostname lookups", async () => {
+	const resolved = await resolveValidatedRemoteTarget("https://example.test/path", { lookup: publicLookup });
+	assert.equal(resolved.url.hostname, "example.test");
+	assert.deepEqual(resolved.pinAddresses, [{ address: "93.184.216.34", family: 4 }]);
+});
+
+test("resolveValidatedRemoteTarget does not pin literal IPs or trusted env proxies", async () => {
+	assert.equal((await resolveValidatedRemoteTarget("http://93.184.216.34/")).pinAddresses, null);
+	const previous = process.env.HTTPS_PROXY;
+	process.env.HTTPS_PROXY = "http://127.0.0.1:8888";
+	try {
+		const resolved = await resolveValidatedRemoteTarget("https://example.test/", {
+			lookup: publicLookup,
+			trustEnvProxy: true,
+		});
+		assert.equal(resolved.pinAddresses, null);
+	} finally {
+		if (previous === undefined) delete process.env.HTTPS_PROXY;
+		else process.env.HTTPS_PROXY = previous;
+	}
 });
 
 test("validateRemoteUrl permits public HTTP and HTTPS targets", async () => {

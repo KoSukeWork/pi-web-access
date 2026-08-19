@@ -1,6 +1,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import net from "node:net";
+import { Agent } from "undici";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const DEFAULT_MAX_REDIRECTS = 5;
@@ -177,7 +178,16 @@ async function defaultLookup(hostname: string): Promise<LookupAddress[]> {
 	return dnsLookup(hostname, { all: true, verbatim: true });
 }
 
-export async function validateRemoteUrl(rawUrl: string | URL, options: ValidationOptions = {}): Promise<URL> {
+export interface ValidatedRemoteTarget {
+	url: URL;
+	/** Addresses from the same lookup used for SSRF. Null when pinning would be wrong (literal IP or trusted env proxy). */
+	pinAddresses: LookupAddress[] | null;
+}
+
+export async function resolveValidatedRemoteTarget(
+	rawUrl: string | URL,
+	options: ValidationOptions = {},
+): Promise<ValidatedRemoteTarget> {
 	const url = rawUrl instanceof URL ? rawUrl : new URL(rawUrl);
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		throw new Error("Only HTTP and HTTPS URLs can be fetched remotely");
@@ -194,10 +204,10 @@ export async function validateRemoteUrl(rawUrl: string | URL, options: Validatio
 
 	if (net.isIP(hostname)) {
 		assertPublicAddress(hostname, hostname, allowRanges);
-		return url;
+		return { url, pinAddresses: null };
 	}
 
-	if (shouldTrustEnvProxy(url, options.trustEnvProxy === true)) return url;
+	if (shouldTrustEnvProxy(url, options.trustEnvProxy === true)) return { url, pinAddresses: null };
 
 	let addresses: LookupAddress[];
 	try {
@@ -211,7 +221,30 @@ export async function validateRemoteUrl(rawUrl: string | URL, options: Validatio
 	for (const { address } of addresses) {
 		assertPublicAddress(address, hostname, allowRanges);
 	}
-	return url;
+	return { url, pinAddresses: addresses };
+}
+
+export async function validateRemoteUrl(rawUrl: string | URL, options: ValidationOptions = {}): Promise<URL> {
+	return (await resolveValidatedRemoteTarget(rawUrl, options)).url;
+}
+
+async function fetchPinnedUrl(url: URL, init: RequestInit, pinAddresses: LookupAddress[]): Promise<Response> {
+	const agent = new Agent({
+		connect: {
+			lookup(_hostname, _lookupOptions, callback) {
+				if (pinAddresses.length === 1) {
+					callback(null, pinAddresses[0].address, pinAddresses[0].family);
+					return;
+				}
+				callback(null, pinAddresses.map(({ address, family }) => ({ address, family })));
+			},
+		},
+	});
+	try {
+		return await fetch(url, { ...init, dispatcher: agent } as RequestInit);
+	} finally {
+		await agent.close();
+	}
 }
 
 export async function fetchRemoteUrl(
@@ -219,29 +252,33 @@ export async function fetchRemoteUrl(
 	init: RequestInit = {},
 	options: FetchRemoteOptions = {},
 ): Promise<Response> {
-	const fetchImpl = options.fetch ?? fetch;
 	const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
-	let current = await validateRemoteUrl(url, options);
+	let current = await resolveValidatedRemoteTarget(url, options);
 	let requestInit = init;
 
 	for (let redirects = 0; redirects <= maxRedirects; redirects++) {
-		const response = await fetchImpl(current, { ...requestInit, redirect: "manual" });
+		const requestUrl = current.url;
+		const response = options.fetch
+			? await options.fetch(requestUrl, { ...requestInit, redirect: "manual" })
+			: current.pinAddresses
+				? await fetchPinnedUrl(requestUrl, { ...requestInit, redirect: "manual" }, current.pinAddresses)
+				: await fetch(requestUrl, { ...requestInit, redirect: "manual" });
 		if (!REDIRECT_STATUSES.has(response.status)) return response;
 
 		const location = response.headers.get("location");
 		if (!location) return response;
-		if (redirects === maxRedirects) throw new Error(`Too many redirects fetching ${current.toString()}`);
+		if (redirects === maxRedirects) throw new Error(`Too many redirects fetching ${requestUrl.toString()}`);
 
-		const from = current;
-		current = await validateRemoteUrl(new URL(location, current), options);
+		const from = requestUrl;
+		current = await resolveValidatedRemoteTarget(new URL(location, requestUrl), options);
 		if (response.status === 303 || ((response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST")) {
 			const { body: _body, ...nextInit } = requestInit;
 			requestInit = { ...nextInit, method: "GET" };
 		}
-		if (options.onRedirect) requestInit = options.onRedirect({ from, to: current, init: requestInit, response });
+		if (options.onRedirect) requestInit = options.onRedirect({ from, to: current.url, init: requestInit, response });
 	}
 
-	throw new Error(`Too many redirects fetching ${current.toString()}`);
+	throw new Error(`Too many redirects fetching ${current.url.toString()}`);
 }
 
 function normalizeHostname(hostname: string): string {

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-08-19
+
+### Fixed
+- Pin outbound `fetch_content` connections to the same public addresses used for SSRF checks so a later DNS answer cannot retarget the request.
+- Treat official Firecrawl cloud endpoints as remote hosted fetch providers unless `allowRemoteHostedProviders` is enabled. Self-hosted `firecrawlBaseUrl` values stay available.
+
 ## [0.24.1] - 2026-08-19
 
 ### Fixed

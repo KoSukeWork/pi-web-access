@@ -110,8 +110,24 @@ function normalizeBaseUrl(value: unknown): string | null {
 	return parsed.toString().replace(/\/+$/, "");
 }
 
+const CLOUD_FIRECRAWL_HOSTS = new Set([
+	"api.firecrawl.dev",
+	"api.firecrawl.com",
+]);
+
 function getBaseUrl(): string | null {
 	return normalizeBaseUrl(process.env.FIRECRAWL_BASE_URL) ?? normalizeBaseUrl(loadConfig().firecrawlBaseUrl);
+}
+
+/** Official Firecrawl cloud hosts fetch the target URL themselves. */
+export function isCloudFirecrawlEndpoint(baseUrl = getBaseUrl()): boolean {
+	if (!baseUrl) return false;
+	try {
+		const host = new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, "");
+		return CLOUD_FIRECRAWL_HOSTS.has(host) || host.endsWith(".firecrawl.dev") || host.endsWith(".firecrawl.com");
+	} catch {
+		return false;
+	}
 }
 
 function requireBaseUrl(): string {
