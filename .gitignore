@@ -2,3 +2,7 @@ node_modules/
 bun.lock
 .pi/
 .pi-subagents/
+
+# Keep compiled extension entrypoints (git install has no build step)
+!dist/*.js
+!**/dist/*.js
