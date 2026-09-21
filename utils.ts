@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +21,11 @@ interface ApiBaseUrlOptions {
 	environmentValue: string | undefined;
 }
 
+function isLoopbackHostname(value: string): boolean {
+	const normalized = value.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+	return normalized === "localhost" || normalized === "::1" || (isIP(normalized) === 4 && normalized.startsWith("127."));
+}
+
 export function resolveApiBaseUrl(options: ApiBaseUrlOptions): string {
 	const fromEnvironment = options.environmentValue !== undefined;
 	const value = fromEnvironment ? options.environmentValue : options.configuredValue;
@@ -38,7 +44,7 @@ export function resolveApiBaseUrl(options: ApiBaseUrlOptions): string {
 	} catch {
 		throw new Error(`${source} must be an absolute HTTP(S) URL`);
 	}
-	if (url.protocol !== "https:") {
+	if (url.protocol !== "https:" && (url.protocol !== "http:" || !isLoopbackHostname(url.hostname))) {
 		throw new Error(`${source} must be an absolute HTTPS URL`);
 	}
 	if (url.username || url.password) {
