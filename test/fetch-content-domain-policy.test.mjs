@@ -12,7 +12,7 @@ async function runExtract(config, urls, optionsByUrl = []) {
 	await writeFile(join(root, "web-search.json"), JSON.stringify(config), "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	for (const key of ["GEMINI_API_KEY", "GOOGLE_GEMINI_API_KEY", "GOOGLE_API_KEY", "CLOUDFLARE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY", "BRIGHTDATA_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "BRIGHTDATA_UNLOCKER_ZONE"]) delete childEnv[key];
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			let fetchCalls = [];
 			globalThis.fetch = async (url) => {
@@ -72,7 +72,7 @@ test("fetch_content rejects chunked oversized text responses while reading", asy
 	const root = await mkdtemp(join(tmpdir(), "pi-oversized-text-extract-"));
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	for (const key of ["GEMINI_API_KEY", "GOOGLE_GEMINI_API_KEY", "GOOGLE_API_KEY", "CLOUDFLARE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY"]) delete childEnv[key];
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			globalThis.fetch = async () => new Response(new ReadableStream({
 				start(controller) {

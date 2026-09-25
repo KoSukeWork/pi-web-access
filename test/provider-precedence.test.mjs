@@ -27,7 +27,7 @@ function runTool(agentDir, provider) {
 	for (const key of ["BRAVE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "SEARCH1API_KEY", "SEARCHINFINITY_API_KEY", "QUERIT_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY", "JINA_API_KEY", "SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY", "ANYSEARCH_API_KEY", "XAI_API_KEY", "BRIGHTDATA_API_KEY", "BRIGHTDATA_SERP_ZONE", "SEARXNG_BASE_URL", "EXA_API_KEY", "GEMINI_API_KEY", "PERPLEXITY_API_KEY"]) {
 		delete childEnv[key];
 	}
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 		const calls = [];
 		globalThis.fetch = async (url) => {
@@ -115,7 +115,7 @@ test("configured explicit-only SerpBase fails instead of falling back", async ()
 	for (const key of ["BRAVE_API_KEY", "PARALLEL_API_KEY", "TINYFISH_API_KEY", "SEARCH1API_KEY", "SEARCHINFINITY_API_KEY", "QUERIT_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_BASE_URL", "FIRECRAWL_API_KEY", "JINA_API_KEY", "SERPDIVE_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "SERPBASE_API_KEY", "ANYSEARCH_API_KEY", "XAI_API_KEY", "BRIGHTDATA_API_KEY", "BRIGHTDATA_SERP_ZONE", "SEARXNG_BASE_URL", "EXA_API_KEY", "GEMINI_API_KEY", "PERPLEXITY_API_KEY"]) {
 		delete childEnv[key];
 	}
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 		globalThis.fetch = async (url) => { throw new Error("Unexpected fallback fetch: " + url); };
 		const tools = [];
@@ -149,7 +149,7 @@ test("malformed config root fails with an explicit object-shape error", async ()
 	await mkdir(agentDir, { recursive: true });
 	await writeFile(join(agentDir, "web-search.json"), "null\n", "utf8");
 
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			globalThis.fetch = async () => { throw new Error("fetch should not run"); };
 			const tools = [];
@@ -175,7 +175,7 @@ test("malformed config root fails with an explicit object-shape error", async ()
 
 test("non-curated search stops after caller cancellation", async () => {
 	const agentDir = await createConfig(null);
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			let calls = 0;
 			globalThis.fetch = async () => {

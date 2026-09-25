@@ -23,7 +23,7 @@ async function runExtract(config) {
 	await writeFile(join(root, "web-search.json"), JSON.stringify(config) + "\n", "utf8");
 	const childEnv = cleanProviderEnv(root);
 
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -50,7 +50,7 @@ async function runTypedExtract(config, contentType) {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-typed-"));
 	await writeFile(join(root, "web-search.json"), typeof config === "string" ? config : JSON.stringify(config) + "\n", "utf8");
 	const childEnv = cleanProviderEnv(root);
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -123,7 +123,7 @@ test("malformed config returns a parse error without hosted fallback", async () 
 test("image attachment gate suppresses malformed config", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-feature-config-"));
 	await writeFile(join(root, "web-search.json"), "{", "utf8");
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(root)};
 			const { canAttachImages, isImageEnabled } = await import(${JSON.stringify(featureConfigUrl)});
@@ -150,7 +150,7 @@ test("cloud Firecrawl is treated as a remote hosted provider", async () => {
 	const childEnv = cleanProviderEnv(root);
 	childEnv.FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 	childEnv.FIRECRAWL_API_KEY = "fc-test";
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -183,7 +183,7 @@ test("self-hosted Firecrawl remains available without hosted-provider opt-in", a
 	const childEnv = cleanProviderEnv(root);
 	childEnv.FIRECRAWL_BASE_URL = "https://crawl.example.com";
 	childEnv.FIRECRAWL_API_KEY = "fc-test";
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -215,7 +215,7 @@ test("Ollama Web Fetch is disabled for remote URLs without hosted-provider opt-i
 	await writeFile(join(root, "web-search.json"), JSON.stringify({ ollamaApiKey: "test-key", fetchRouting: { providers: ["ollama", "http"] } }) + "\n", "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
 	delete childEnv.OLLAMA_API_KEY;
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {
@@ -243,7 +243,7 @@ test("hosted providers cannot bypass redirect policy validation", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-fetch-routing-redirect-"));
 	await writeFile(join(root, "web-search.json"), JSON.stringify({ fetchRouting: { providers: ["jina"], allowRemoteHostedProviders: true } }) + "\n", "utf8");
 	const childEnv = { ...process.env, PI_CODING_AGENT_DIR: root, HOME: root, USERPROFILE: root };
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			const calls = [];
 			globalThis.fetch = async (url) => {

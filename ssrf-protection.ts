@@ -1,7 +1,7 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import net from "node:net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const DEFAULT_MAX_REDIRECTS = 5;
@@ -137,6 +137,8 @@ export function loadSsrfConfig(): SsrfConfig {
 
 interface ValidationOptions {
 	lookup?: Lookup;
+	/** Bound the wait even when the underlying DNS resolver cannot be cancelled. */
+	signal?: AbortSignal;
 	/** Optional hostname policy for fetch_content target URLs. */
 	domainPolicy?: DomainPolicy;
 	/**
@@ -171,11 +173,38 @@ interface RedirectRequestInitArgs {
 interface FetchRemoteOptions extends ValidationOptions {
 	fetch?: Fetch;
 	maxRedirects?: number;
+	/** Prepare per-hop headers after validation; derived credentials are not reused on the next hop. */
+	onRequest?: (args: { url: URL; init: RequestInit }) => RequestInit | Promise<RequestInit>;
 	onRedirect?: (args: RedirectRequestInitArgs) => RequestInit;
 }
 
 async function defaultLookup(hostname: string): Promise<LookupAddress[]> {
 	return dnsLookup(hostname, { all: true, verbatim: true });
+}
+
+// DNS and request hooks can outlive cancellation. Stop waiting without leaving
+// an abort listener or an unobserved rejection from the underlying operation.
+async function withSignal<T>(operation: () => T | Promise<T>, signal?: AbortSignal | null): Promise<T> {
+	signal?.throwIfAborted();
+	if (!signal) return operation();
+	let onAbort: () => void;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	try {
+		const result = await Promise.race([
+			Promise.resolve().then(() => {
+				signal.throwIfAborted();
+				return operation();
+			}),
+			aborted,
+		]);
+		signal.throwIfAborted();
+		return result;
+	} finally {
+		signal.removeEventListener("abort", onAbort!);
+	}
 }
 
 export interface ValidatedRemoteTarget {
@@ -188,6 +217,7 @@ export async function resolveValidatedRemoteTarget(
 	rawUrl: string | URL,
 	options: ValidationOptions = {},
 ): Promise<ValidatedRemoteTarget> {
+	options.signal?.throwIfAborted();
 	const url = rawUrl instanceof URL ? rawUrl : new URL(rawUrl);
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		throw new Error("Only HTTP and HTTPS URLs can be fetched remotely");
@@ -211,11 +241,13 @@ export async function resolveValidatedRemoteTarget(
 
 	let addresses: LookupAddress[];
 	try {
-		addresses = await (options.lookup ?? defaultLookup)(hostname);
+		addresses = await withSignal(() => (options.lookup ?? defaultLookup)(hostname), options.signal);
 	} catch (err) {
+		options.signal?.throwIfAborted();
 		const message = err instanceof Error ? err.message : String(err);
 		throw new Error(`Failed to resolve ${hostname}: ${message}`);
 	}
+	options.signal?.throwIfAborted();
 
 	if (addresses.length === 0) throw new Error(`Failed to resolve ${hostname}: no addresses returned`);
 	for (const { address } of addresses) {
@@ -231,8 +263,8 @@ export async function validateRemoteUrl(rawUrl: string | URL, options: Validatio
 async function fetchPinnedUrl(url: URL, init: RequestInit, pinAddresses: LookupAddress[]): Promise<Response> {
 	const agent = new Agent({
 		connect: {
-			lookup(_hostname, _lookupOptions, callback) {
-				if (pinAddresses.length === 1) {
+			lookup(_hostname, lookupOptions, callback) {
+				if (!lookupOptions.all) {
 					callback(null, pinAddresses[0].address, pinAddresses[0].family);
 					return;
 				}
@@ -241,9 +273,12 @@ async function fetchPinnedUrl(url: URL, init: RequestInit, pinAddresses: LookupA
 		},
 	});
 	try {
-		return await fetch(url, { ...init, dispatcher: agent } as RequestInit);
+		// The dispatcher and fetch must use the same undici version.
+		return await undiciFetch(url, { ...init, dispatcher: agent } as UndiciRequestInit) as unknown as Response;
 	} finally {
-		await agent.close();
+		// Graceful close waits for body completion/cancellation. Awaiting it here
+		// would prevent the caller from draining a response larger than the buffer.
+		void agent.close().catch(() => agent.destroy()).catch(() => {});
 	}
 }
 
@@ -253,29 +288,46 @@ export async function fetchRemoteUrl(
 	options: FetchRemoteOptions = {},
 ): Promise<Response> {
 	const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
-	let current = await resolveValidatedRemoteTarget(url, options);
-	let requestInit = init;
+	const signal = init.signal && options.signal && init.signal !== options.signal
+		? AbortSignal.any([init.signal, options.signal])
+		: init.signal ?? options.signal;
+	const validationOptions = { ...options, signal };
+	let current = await resolveValidatedRemoteTarget(url, validationOptions);
+	let requestInit = signal ? { ...init, signal } : init;
 
 	for (let redirects = 0; redirects <= maxRedirects; redirects++) {
+		signal?.throwIfAborted();
 		const requestUrl = current.url;
+		let hopInit = requestInit;
+		if (options.onRequest) {
+			requestInit.signal?.throwIfAborted();
+			hopInit = await withSignal(() => options.onRequest!({ url: requestUrl, init: requestInit }), signal);
+			signal?.throwIfAborted();
+			hopInit.signal?.throwIfAborted();
+		}
 		const response = options.fetch
-			? await options.fetch(requestUrl, { ...requestInit, redirect: "manual" })
+			? await options.fetch(requestUrl, { ...hopInit, redirect: "manual" })
 			: current.pinAddresses
-				? await fetchPinnedUrl(requestUrl, { ...requestInit, redirect: "manual" }, current.pinAddresses)
-				: await fetch(requestUrl, { ...requestInit, redirect: "manual" });
+				? await fetchPinnedUrl(requestUrl, { ...hopInit, redirect: "manual" }, current.pinAddresses)
+				: await fetch(requestUrl, { ...hopInit, redirect: "manual" });
 		if (!REDIRECT_STATUSES.has(response.status)) return response;
 
 		const location = response.headers.get("location");
 		if (!location) return response;
-		if (redirects === maxRedirects) throw new Error(`Too many redirects fetching ${requestUrl.toString()}`);
+		try {
+			if (redirects === maxRedirects) throw new Error(`Too many redirects fetching ${requestUrl.toString()}`);
 
-		const from = requestUrl;
-		current = await resolveValidatedRemoteTarget(new URL(location, requestUrl), options);
-		if (response.status === 303 || ((response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST")) {
-			const { body: _body, ...nextInit } = requestInit;
-			requestInit = { ...nextInit, method: "GET" };
+			const from = requestUrl;
+			current = await resolveValidatedRemoteTarget(new URL(location, requestUrl), validationOptions);
+			if (response.status === 303 || ((response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST")) {
+				const { body: _body, ...nextInit } = requestInit;
+				requestInit = { ...nextInit, method: "GET" };
+			}
+			if (options.onRedirect) requestInit = options.onRedirect({ from, to: current.url, init: requestInit, response });
+		} finally {
+			// Redirect bodies will never be consumed, including when validation fails.
+			await response.body?.cancel().catch(() => {});
 		}
-		if (options.onRedirect) requestInit = options.onRedirect({ from, to: current.url, init: requestInit, response });
 	}
 
 	throw new Error(`Too many redirects fetching ${current.url.toString()}`);

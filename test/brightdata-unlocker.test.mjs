@@ -44,7 +44,7 @@ function runChild(script, env = {}) {
 	])
 		delete childEnv[key];
 	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
+	return spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: script,
 		encoding: "utf8",
 		env: childEnv,
@@ -423,10 +423,13 @@ test("Bright Data Web Unlocker availability needs both a zone and a credential s
 test("Bright Data Web Unlocker resolves the credential at request time, after the SSRF guard", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pi-web-access-brightdata-"));
 	const marker = join(home, "resolver-ran");
+	const resolver = join(home, "resolver.cjs");
+	await writeFile(resolver, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, ""); process.stdout.write("bd-command-key");\n`);
+	const shellQuote = value => process.platform === "win32" ? `"${value}"` : `'${value.replaceAll("'", "'\\''")}'`;
 	await writeFile(
 		join(home, "web-search.json"),
 		JSON.stringify({
-			brightdataApiKey: `!touch ${marker} && printf bd-command-key`,
+			brightdataApiKey: `!${shellQuote(process.execPath)} ${shellQuote(resolver)}`,
 			brightdataUnlockerZone: "pi_unlocker",
 		}) + "\n",
 		"utf8",
@@ -604,9 +607,9 @@ test("Bright Data Web Unlocker propagates cancellation instead of returning null
 	);
 	assert.equal(child.status, 0, child.stderr);
 	const output = JSON.parse(child.stdout.trim());
-	// The caller signal reaches the request, and the abort is rethrown so
-	// extractContent can report "Aborted" instead of falling through the chain.
-	assert.equal(output.sawAbortedSignal, true);
+	// Cancellation ends validation before the network request starts, and is
+	// rethrown so extractContent can report "Aborted" without trying fallbacks.
+	assert.equal(output.sawAbortedSignal, null);
 	assert.equal(output.name, "AbortError");
 	assert.match(output.message, /aborted/i);
 });

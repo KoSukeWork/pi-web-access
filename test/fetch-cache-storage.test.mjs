@@ -1,3 +1,4 @@
+import "../test-support/pinned-fetch.mjs";
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";

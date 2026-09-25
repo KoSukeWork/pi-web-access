@@ -19,7 +19,7 @@ test("YouTube extraction surfaces Gemini API errors", async () => {
 	delete env.PI_ALLOW_BROWSER_COOKIES;
 	delete env.FEYNMAN_ALLOW_BROWSER_COOKIES;
 
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl),
 		encoding: "utf8",
 		env,

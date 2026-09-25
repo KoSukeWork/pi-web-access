@@ -1,9 +1,164 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { test } from "node:test";
 
 import { fetchRemoteUrl, resolveValidatedRemoteTarget, validateRemoteUrl } from "../ssrf-protection.ts";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
+
+async function observeSettlement(promise) {
+	let timer;
+	try {
+		return await Promise.race([
+			promise.then(value => ({ value }), error => ({ error })),
+			new Promise(resolve => { timer = setTimeout(() => resolve(null), 250); }),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+test("pre-aborted validation never starts DNS and preserves the caller's reason", async () => {
+	const controller = new AbortController();
+	const reason = new Error("caller cancelled");
+	controller.abort(reason);
+	let lookups = 0;
+	await assert.rejects(validateRemoteUrl("https://example.test/", {
+		signal: controller.signal, lookup: async () => { lookups++; return publicLookup(); },
+	}), error => error === reason);
+	assert.equal(lookups, 0);
+});
+
+for (const lateOutcome of ["resolve", "reject"]) {
+	test(`DNS cancellation settles before a late resolver ${lateOutcome} and removes its listener`, async () => {
+		const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+		const controller = new AbortController(), reason = new Error("caller cancelled");
+		const pending = validateRemoteUrl("https://example.test/", {
+			signal: controller.signal, lookup: () => { entered.resolve(); return gate.promise; },
+		});
+		await entered.promise;
+		controller.abort(reason);
+		try {
+			assert.deepEqual(await observeSettlement(pending), { error: reason });
+			assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+		} finally {
+			if (lateOutcome === "reject") gate.reject(new Error("late DNS failure"));
+			else gate.resolve(await publicLookup());
+			await pending.catch(() => {});
+			await nextTurn(); // Late rejection must also be handled after cancellation.
+		}
+	});
+}
+
+for (const outcome of ["resolve", "reject", "throw"]) {
+	test(`a DNS ${outcome} removes the abort listener without masking resolver errors`, async () => {
+		const controller = new AbortController();
+		const lookup = () => {
+			if (outcome === "throw") throw new Error("resolver failed");
+			return outcome === "reject" ? Promise.reject(new Error("resolver failed")) : publicLookup();
+		};
+		const pending = validateRemoteUrl("https://example.test/", { signal: controller.signal, lookup });
+		if (outcome === "resolve") assert.equal((await pending).hostname, "example.test");
+		else await assert.rejects(pending, /Failed to resolve example.test: resolver failed/);
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+	});
+}
+
+for (const phase of ["initial", "redirect"]) {
+	for (const trigger of ["cancel", "timeout"]) {
+		test(`${trigger} interrupts ${phase} DNS without sending the next request`, async () => {
+			const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+			const controller = new AbortController();
+			let lookups = 0, requests = 0, cancelledBodies = 0, timer;
+			const pending = fetchRemoteUrl("https://example.test/", { signal: controller.signal }, {
+				lookup: () => {
+					if (++lookups === (phase === "initial" ? 1 : 2)) { entered.resolve(); return gate.promise; }
+					return publicLookup();
+				},
+				fetch: async () => {
+					requests++;
+					return new Response(new ReadableStream({ cancel() { cancelledBodies++; } }), {
+						status: 302, headers: { location: "https://next.example.test/" },
+					});
+				},
+			});
+			await entered.promise;
+			if (trigger === "cancel") controller.abort();
+			else timer = setTimeout(() => controller.abort(), 10);
+			try {
+				const observed = await observeSettlement(pending);
+				assert.equal(observed?.error?.name, "AbortError");
+				assert.equal(requests, phase === "initial" ? 0 : 1);
+				assert.equal(cancelledBodies, phase === "initial" ? 0 : 1);
+				assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+			} finally {
+				clearTimeout(timer);
+				gate.resolve(await publicLookup());
+				await pending.catch(() => {});
+			}
+		});
+	}
+}
+
+for (const signalSource of ["init", "options"]) {
+	for (const lateOutcome of ["resolve", "reject"]) {
+		test(`request hook cancellation via ${signalSource} handles a late ${lateOutcome} and releases its listener`, async () => {
+			const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+			const controller = new AbortController(), reason = new Error("cancel pending cookie lookup");
+			let requests = 0;
+			const pending = fetchRemoteUrl("https://example.test/", signalSource === "init" ? { signal: controller.signal } : {}, {
+				...(signalSource === "options" ? { signal: controller.signal } : {}),
+				lookup: publicLookup,
+				onRequest: ({ init }) => { entered.resolve(); return gate.promise.then(() => init); },
+				fetch: async () => { requests++; return new Response("ok"); },
+			});
+			await entered.promise;
+			controller.abort(reason);
+			try {
+				assert.deepEqual(await observeSettlement(pending), { error: reason });
+				assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+			} finally {
+				if (lateOutcome === "reject") gate.reject(new Error("late cookie failure"));
+				else gate.resolve();
+				await pending.catch(() => {});
+				await nextTurn();
+			}
+			assert.equal(requests, 0);
+		});
+	}
+}
+
+for (const outcome of ["resolve", "reject", "throw"]) {
+	test(`a request hook ${outcome} releases the abort listener and preserves its result`, async () => {
+		const controller = new AbortController(), reason = new Error("cookie lookup failed");
+		let requests = 0;
+		const pending = fetchRemoteUrl("https://example.test/", { signal: controller.signal }, {
+			lookup: publicLookup,
+			onRequest: ({ init }) => {
+				if (outcome === "throw") throw reason;
+				return outcome === "reject" ? Promise.reject(reason) : { ...init, headers: { cookie: "fixture=value" } };
+			},
+			fetch: async (_url, init) => { requests++; assert.equal(new Headers(init.headers).get("cookie"), "fixture=value"); return new Response("ok"); },
+		});
+		if (outcome === "resolve") assert.equal(await (await pending).text(), "ok");
+		else await assert.rejects(pending, error => error === reason);
+		assert.equal(requests, outcome === "resolve" ? 1 : 0);
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+	});
+}
+
+test("a hook cannot discard cancellation by returning a new request init", async () => {
+	const controller = new AbortController();
+	let requests = 0;
+	await assert.rejects(fetchRemoteUrl("https://example.test/", { signal: controller.signal }, {
+		lookup: publicLookup,
+		onRequest: () => { controller.abort(); return {}; },
+		fetch: async () => { requests++; return new Response("ok"); },
+	}), { name: "AbortError" });
+	assert.equal(requests, 0);
+	assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
 
 async function rejectsInternal(url) {
 	await assert.rejects(

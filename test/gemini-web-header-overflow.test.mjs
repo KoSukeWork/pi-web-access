@@ -128,7 +128,7 @@ test("resolveGeminiFetch surfaces dedicated agent construction errors", () => {
 		`import { resolveGeminiFetch } from ${JSON.stringify(new URL("../gemini-web.ts", import.meta.url).href)};`,
 		"await resolveGeminiFetch();",
 	].join("\n");
-	const result = spawnSync(process.execPath, ["--input-type=module"], {
+	const result = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: script,
 		encoding: "utf8",
 		env,

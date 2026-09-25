@@ -3,15 +3,13 @@ import { activityMonitor } from "./activity.ts";
 import { redactCredential, resolveCredential } from "./credential-source.ts";
 import type { ExtractedContent, ExtractOptions } from "./extract.ts";
 import type { SearchOptions, SearchResponse } from "./perplexity.ts";
-import { loadSsrfConfig, validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
+import { fetchRemoteUrl, loadSsrfConfig, validateRemoteUrl, type Lookup } from "./ssrf-protection.ts";
 import { getWebSearchConfigPath } from "./utils.ts";
 
 const CONFIG_PATH = getWebSearchConfigPath();
 const DEFAULT_API_VERSION = "v2";
 const EXTRACT_TIMEOUT_MS = 60_000;
 const SEARCH_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_REDIRECTS = 5;
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const SUPPORTED_API_VERSIONS = ["v1", "v2"] as const;
 type FirecrawlApiVersion = (typeof SUPPORTED_API_VERSIONS)[number];
 
@@ -200,13 +198,10 @@ function ssrfOptions(options?: FirecrawlExtractOptions | FirecrawlSearchOptions)
 	};
 }
 
-function withoutSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
-	const next = { ...headers };
-	delete next.Authorization;
+function withoutSensitiveHeaders(headers: HeadersInit | undefined): Record<string, string> {
+	const next = Object.fromEntries(new Headers(headers));
 	delete next.authorization;
-	delete next.Cookie;
 	delete next.cookie;
-	delete next["X-API-Key"];
 	delete next["x-api-key"];
 	return next;
 }
@@ -216,21 +211,16 @@ async function fetchFirecrawlApi(
 	init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal },
 	options: FirecrawlExtractOptions | FirecrawlSearchOptions | undefined,
 ): Promise<Response> {
-	let current = await validateRemoteUrl(url, ssrfOptions(options));
-	let headers = init.headers;
-	for (let redirects = 0; redirects <= DEFAULT_MAX_REDIRECTS; redirects++) {
-		const response = await fetch(current, { ...init, headers, redirect: "manual" });
-		if (!REDIRECT_STATUSES.has(response.status)) return response;
-
-		const location = response.headers.get("location");
-		if (!location) return response;
-		if (redirects === DEFAULT_MAX_REDIRECTS) throw new Error(`Too many redirects fetching ${current.toString()}`);
-
-		const next = await validateRemoteUrl(new URL(location, current), ssrfOptions(options));
-		if (next.origin !== current.origin) headers = withoutSensitiveHeaders(headers);
-		current = next;
-	}
-	throw new Error(`Too many redirects fetching ${current.toString()}`);
+	return fetchRemoteUrl(url, init, {
+		...ssrfOptions(options),
+		onRedirect: ({ from, to, init: requestInit }) => ({
+			...requestInit,
+			// Preserve the API's existing POST replay behavior across redirects.
+			method: init.method,
+			body: init.body,
+			headers: from.origin === to.origin ? requestInit.headers : withoutSensitiveHeaders(requestInit.headers),
+		}),
+	});
 }
 
 function scrapeBody(url: string): Record<string, unknown> {
@@ -358,7 +348,7 @@ function mapSearchResults(data: unknown, numResults: number, filters: DomainFilt
 async function firecrawlFetch(
 	endpoint: string,
 	body: Record<string, unknown>,
-	signal: AbortSignal | undefined,
+	signal: AbortSignal,
 	options: FirecrawlExtractOptions | FirecrawlSearchOptions | undefined,
 	label = endpoint,
 	activity: { type: "api"; query: string } | { type: "fetch"; url: string } | undefined = undefined,
@@ -375,7 +365,7 @@ async function firecrawlFetch(
 			method: "POST",
 			headers,
 			body: JSON.stringify(body),
-			signal: requestSignal(options?.timeoutMs ?? EXTRACT_TIMEOUT_MS, signal),
+			signal,
 		}, options);
 		if (!response.ok) {
 			const text = await response.text().catch(() => "");
@@ -418,7 +408,7 @@ export async function searchWithFirecrawl(query: string, options: FirecrawlSearc
 	const envelope = await firecrawlFetch(
 		"search",
 		searchBody(query, options, numResults, filters),
-		options.signal,
+		requestSignal(options.timeoutMs ?? SEARCH_TIMEOUT_MS, options.signal),
 		{ ...options, timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS },
 		"search",
 		{ type: "api", query },
@@ -435,7 +425,8 @@ export async function extractWithFirecrawl(
 	options?: FirecrawlExtractOptions,
 ): Promise<ExtractedContent | null> {
 	requireBaseUrl();
-	await validateRemoteUrl(url, ssrfOptions(options));
+	signal = requestSignal(options?.timeoutMs ?? EXTRACT_TIMEOUT_MS, signal);
+	await validateRemoteUrl(url, { ...ssrfOptions(options), signal });
 	const envelope = await firecrawlFetch("scrape", scrapeBody(url), signal, options);
 	const data = envelope.data;
 	if (!data || typeof data !== "object" || Array.isArray(data)) {

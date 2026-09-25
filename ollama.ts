@@ -187,9 +187,11 @@ export function isOllamaFetchAvailable(): boolean {
 }
 
 export async function extractWithOllama(url: string, signal?: AbortSignal, options: OllamaExtractOptions = {}): Promise<ExtractedContent | null> {
+	signal = AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS), ...(signal ? [signal] : [])]);
 	const ssrf = options.ssrf ?? loadSsrfConfig();
 	const domainPolicy = loadFetchContentDomainPolicy();
 	await validateRemoteUrl(url, {
+		signal,
 		allowRanges: ssrf.allowRanges,
 		trustEnvProxy: ssrf.trustEnvProxy,
 		domainPolicy,
@@ -203,7 +205,7 @@ export async function extractWithOllama(url: string, signal?: AbortSignal, optio
 			method: "POST",
 			headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
 			body: JSON.stringify({ url }),
-			signal: signal ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(options.timeoutMs ?? SEARCH_TIMEOUT_MS),
+			signal,
 		}, {
 			allowRanges: ssrf.allowRanges,
 			trustEnvProxy: ssrf.trustEnvProxy,

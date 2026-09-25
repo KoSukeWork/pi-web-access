@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const extractorUrl = new URL("../pdf-extract.ts", import.meta.url).href;
 
 test("extractPDFToMarkdown works on Node 22 without native Promise.try", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -59,7 +59,7 @@ test("extractPDFToMarkdown uses Gemini before loading unpdf", () => {
 });
 
 test("extractPDFToMarkdown falls back to unpdf when Gemini output is truncated", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "truncate"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -75,7 +75,7 @@ test("extractPDFToMarkdown falls back to unpdf when Gemini output is truncated",
 });
 
 test("extractPDFToMarkdown preserves caller cancellation without local fallback", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "abort"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -344,7 +344,7 @@ function buildChildScript(
 }
 
 test("extractPDFToMarkdown uses Datalab before unpdf when configured", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "none", "success"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -360,7 +360,7 @@ test("extractPDFToMarkdown uses Datalab before unpdf when configured", () => {
 });
 
 test("extractPDFToMarkdown falls back to unpdf when Datalab conversion fails", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "none", "fail"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -376,7 +376,7 @@ test("extractPDFToMarkdown falls back to unpdf when Datalab conversion fails", (
 });
 
 test("extractPDFToMarkdown auto order runs Datalab before Gemini", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "success", "success"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -393,7 +393,7 @@ test("extractPDFToMarkdown auto order runs Datalab before Gemini", () => {
 });
 
 test("extractPDFToMarkdown auto order falls back from Datalab to Gemini", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "success", "fail"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -410,7 +410,7 @@ test("extractPDFToMarkdown auto order falls back from Datalab to Gemini", () => 
 });
 
 test("extractPDFToMarkdown provider=datalab skips Gemini even with a Gemini key", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(
 			extractorUrl,
 			false,
@@ -433,7 +433,7 @@ test("extractPDFToMarkdown provider=datalab skips Gemini even with a Gemini key"
 });
 
 test("extractPDFToMarkdown provider=datalab without a key skips Gemini", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "success", "none", "datalab"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
@@ -450,7 +450,7 @@ test("extractPDFToMarkdown provider=datalab without a key skips Gemini", () => {
 });
 
 test("extractPDFToMarkdown provider=gemini skips Datalab even with a Datalab key", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(
 			extractorUrl,
 			false,
@@ -473,7 +473,7 @@ test("extractPDFToMarkdown provider=gemini skips Datalab even with a Datalab key
 });
 
 test("extractPDFToMarkdown provider=unpdf skips Gemini even with a Gemini key", () => {
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: buildChildScript(extractorUrl, false, "success", "none", "unpdf"),
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,

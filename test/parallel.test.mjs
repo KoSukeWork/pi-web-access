@@ -26,7 +26,7 @@ function runChild(script, env = {}) {
 	delete childEnv.XDG_CONFIG_HOME;
 	delete childEnv.TINYFISH_API_KEY;
 	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
+	return spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: script,
 		encoding: "utf8",
 		env: childEnv,

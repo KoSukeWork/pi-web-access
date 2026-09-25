@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Honor cancellation during initial DNS validation before raw or authenticated fetches start.
+- Release final HTTP response bodies when extraction rejects their status, size, type, or configuration, including error paths.
+- Use the validated DNS addresses for authenticated browser-cookie fetches and Firecrawl/Bright Data API requests, including each redirect hop.
+- Cancel discarded redirect response bodies on success and failure paths, while preserving per-hop Cookie selection, cross-origin credential stripping, and API POST replay behavior.
+
 ## [0.24.3] - 2026-08-19
 
 ### Changed

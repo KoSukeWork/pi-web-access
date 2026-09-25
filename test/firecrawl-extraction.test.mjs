@@ -17,7 +17,7 @@ function runChild(script, env = {}) {
 		"BRIGHTDATA_API_KEY", "KAGI_API_KEY", "OLLAMA_API_KEY", "BRIGHTDATA_UNLOCKER_ZONE",
 	]) delete childEnv[key];
 	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], {
+	return spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: script,
 		encoding: "utf8",
 		env: childEnv,

@@ -1,3 +1,4 @@
+import "../test-support/pinned-fetch.mjs";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 

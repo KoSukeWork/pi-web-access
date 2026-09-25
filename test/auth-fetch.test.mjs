@@ -44,7 +44,7 @@ function runModule(root, script, extraEnv = {}) {
 		PI_ALLOW_BROWSER_COOKIES: "1",
 		...extraEnv,
 	};
-	const child = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--experimental-strip-types", "--input-type=module"], {
 		input: script,
 		encoding: "utf8",
 		env,

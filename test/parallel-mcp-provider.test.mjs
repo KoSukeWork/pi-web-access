@@ -20,7 +20,7 @@ function runChild(script, env = {}) {
 	const childEnv = { ...process.env };
 	for (const key of ["PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "PARALLEL_API_KEY", "OPENAI_API_KEY", "BRAVE_API_KEY", "EXA_API_KEY", "GEMINI_API_KEY", "SEARXNG_BASE_URL"]) delete childEnv[key];
 	Object.assign(childEnv, env);
-	return spawnSync(process.execPath, ["--input-type=module"], { input: script, encoding: "utf8", env: childEnv, maxBuffer: 2 * 1024 * 1024 });
+	return spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], { input: script, encoding: "utf8", env: childEnv, maxBuffer: 2 * 1024 * 1024 });
 }
 
 test("Parallel MCP searches anonymously, maps filters, and supports explicit routing", async () => {

@@ -94,43 +94,26 @@ async function resolveAuthCookieHeader(url: string | URL, profile: AuthFetchProf
 	throw new Error(`Authenticated fetch profile ${profile.name} could not build a cookie header`);
 }
 
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-
 async function fetchAuthenticatedRemoteUrl(
 	url: string,
 	init: RequestInit,
 	validationOptions: { ssrf: SsrfConfig; domainPolicy: DomainPolicy; lookup?: Lookup },
 	profile: AuthFetchProfile,
 ): Promise<Response> {
-	let current = await validateRemoteUrl(url, {
+	return fetchRemoteUrl(url, init, {
 		allowRanges: validationOptions.ssrf.allowRanges,
 		trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
 		domainPolicy: validationOptions.domainPolicy,
 		...(validationOptions.lookup ? { lookup: validationOptions.lookup } : {}),
+		onRequest: async ({ url: current, init: requestInit }) => {
+			const cookieHeader = await resolveAuthCookieHeader(current, profile);
+			return { ...requestInit, headers: { ...Object.fromEntries(new Headers(requestInit.headers)), cookie: cookieHeader } };
+		},
+		onRedirect: ({ from, to, init: requestInit }) => {
+			authFetchRedirectGuard(profile, from, to);
+			return requestInit;
+		},
 	});
-	let requestInit = init;
-	for (let redirects = 0; redirects <= 5; redirects++) {
-		const cookieHeader = await resolveAuthCookieHeader(current, profile);
-		const headers = { ...(requestInit.headers as Record<string, string>), cookie: cookieHeader };
-		const response = await fetch(current, { ...requestInit, headers, redirect: "manual" });
-		if (!REDIRECT_STATUSES.has(response.status)) return response;
-		const location = response.headers.get("location");
-		if (!location) return response;
-		if (redirects === 5) throw new Error(`Too many redirects fetching ${current.toString()}`);
-		const from = current;
-		current = await validateRemoteUrl(new URL(location, current), {
-			allowRanges: validationOptions.ssrf.allowRanges,
-			trustEnvProxy: validationOptions.ssrf.trustEnvProxy,
-			domainPolicy: validationOptions.domainPolicy,
-			...(validationOptions.lookup ? { lookup: validationOptions.lookup } : {}),
-		});
-		authFetchRedirectGuard(profile, from, current);
-		if (response.status === 303 || ((response.status === 301 || response.status === 302) && requestInit.method?.toUpperCase() === "POST")) {
-			const { body: _body, ...nextInit } = requestInit;
-			requestInit = { ...nextInit, method: "GET" };
-		}
-	}
-	throw new Error(`Too many redirects fetching ${current.toString()}`);
 }
 
 function loadFetchRouting(): FetchRouting {
@@ -246,11 +229,13 @@ async function extractWithJinaReader(
 	const jinaUrl = JINA_READER_BASE + url;
 
 	const activityId = activityMonitor.logStart({ type: "api", query: `jina: ${url}` });
+	signal = AbortSignal.any([AbortSignal.timeout(JINA_TIMEOUT_MS), ...(signal ? [signal] : [])]);
 
 	try {
 		const ssrf = loadSsrfConfig();
 		const domainPolicy = loadFetchContentDomainPolicy();
 		await validateRemoteUrl(url, {
+			signal,
 			allowRanges: ssrf.allowRanges,
 			trustEnvProxy: ssrf.trustEnvProxy,
 			domainPolicy,
@@ -261,10 +246,7 @@ async function extractWithJinaReader(
 				"Accept": "text/markdown",
 				"X-No-Cache": "true",
 			},
-			signal: AbortSignal.any([
-				AbortSignal.timeout(JINA_TIMEOUT_MS),
-				...(signal ? [signal] : []),
-			]),
+			signal,
 		});
 
 		if (!res.ok) {
@@ -403,10 +385,18 @@ export async function extractContent(
 	} catch {
 	}
 	if (remoteUrl) {
+		const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		const started = performance.now();
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+		const onAbort = () => controller.abort(signal?.reason);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
 		try {
 			const ssrf = loadSsrfConfig();
 			const domainPolicy = loadFetchContentDomainPolicy();
 			await validateRemoteUrl(remoteUrl, {
+				signal: controller.signal,
 				allowRanges: ssrf.allowRanges,
 				trustEnvProxy: ssrf.trustEnvProxy,
 				domainPolicy,
@@ -414,8 +404,18 @@ export async function extractContent(
 			});
 		} catch (err) {
 			return { url, title: "", content: "", error: errorMessage(err) };
+		} finally {
+			clearTimeout(timeoutId);
+			signal?.removeEventListener("abort", onAbort);
+		}
+		if (options?.mode === "raw" || options?.authFetchProfile) {
+			// Direct HTTP shares its budget with the initial target validation.
+			const remaining = timeoutMs - (performance.now() - started);
+			if (remaining <= 0) return abortedResult(url);
+			options = { ...options, timeoutMs: remaining };
 		}
 	}
+	if (signal?.aborted) return abortedResult(url);
 
 	if (options?.authFetchProfile) {
 		try {
@@ -997,9 +997,12 @@ async function extractViaHttp(
 	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
 	const onAbort = () => controller.abort();
-	signal?.addEventListener("abort", onAbort);
+	signal?.addEventListener("abort", onAbort, { once: true });
+	if (signal?.aborted) onAbort();
+	let response: Response | undefined;
 
 	try {
+		controller.signal.throwIfAborted();
 		const ssrf = loadSsrfConfig();
 		const domainPolicy = loadFetchContentDomainPolicy();
 		const authProfile = options?.authFetchProfile;
@@ -1017,7 +1020,7 @@ async function extractViaHttp(
 				"Upgrade-Insecure-Requests": "1",
 			},
 		};
-		const response = authProfile
+		response = authProfile
 			? await fetchAuthenticatedRemoteUrl(url, requestInit, { ssrf, domainPolicy, ...(options?.lookup ? { lookup: options.lookup } : {}) }, authProfile)
 			: await fetchRemoteUrl(
 				url,
@@ -1234,6 +1237,9 @@ async function extractViaHttp(
 		}
 		return { url, title: "", content: "", error: message };
 	} finally {
+		// Early returns still own the final response body. Keep cancellation
+		// active until it is released, without replacing the extraction result.
+		await response?.body?.cancel().catch(() => {});
 		clearTimeout(timeoutId);
 		signal?.removeEventListener("abort", onAbort);
 	}

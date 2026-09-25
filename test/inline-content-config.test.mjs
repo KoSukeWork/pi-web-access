@@ -13,7 +13,7 @@ async function runScenario(maxInlineContentChars) {
 	if (maxInlineContentChars !== undefined) {
 		await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ maxInlineContentChars }) + "\n", "utf8");
 	}
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			import initializeExtension from ${JSON.stringify(indexUrl)};
 			import { clearResults } from ${JSON.stringify(storageUrl)};
@@ -76,7 +76,7 @@ test("maxInlineContentChars applies to direct and stored content slices", async 
 test("stored content schema and execution keep one registered limit", async () => {
 	const agentDir = await mkdtemp(join(tmpdir(), "pi-web-access-inline-content-"));
 	await writeFile(join(agentDir, "web-search.json"), JSON.stringify({ maxInlineContentChars: 40_000 }) + "\n", "utf8");
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
+	const child = spawnSync(process.execPath, ["--import", new URL("../test-support/pinned-fetch.mjs", import.meta.url).href, "--input-type=module"], {
 		input: `
 			import initializeExtension from ${JSON.stringify(indexUrl)};
 			import { storeResult, clearResults } from ${JSON.stringify(storageUrl)};
